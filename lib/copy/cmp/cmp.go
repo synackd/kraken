@@ -72,6 +72,43 @@ func IsEqualSymlink(link1, link2 string, lInfo1, lInfo2 os.FileInfo) error {
 	return nil
 }
 
+// areFilesOrEqualSymlinks returns nil if (1) the files are
+// both symlinks AND they point to the same location or (2)
+// neither file is a symlink. Otherwise, it returns an error.
+func areFilesOrEqualSymlinks(opt copy.Options, fPath1, fPath2 string, fInfo1, fInfo2 os.FileInfo) (file1, file2 string, err error) {
+	fIsSymLink1 := fInfo1.Mode()&os.ModeSymlink == os.ModeSymlink
+	fIsSymLink2 := fInfo2.Mode()&os.ModeSymlink == os.ModeSymlink
+	file1 = fPath1
+	file2 = fPath2
+
+	// Check if either or both files are symlinks
+	if fIsSymLink1 || fIsSymLink2 {
+		if opt.FollowSymlinks {
+			// If we're following symlinks, find their targets in order
+			// to compare the end results
+			file1, err = filepath.EvalSymlinks(file1)
+			if err != nil {
+				return
+			}
+			file2, err = filepath.EvalSymlinks(file2)
+			if err != nil {
+				return
+			}
+		} else {
+			if fIsSymLink1 && fIsSymLink2 {
+				// If BOTH are symlinks and we're not following them,
+				// compare their targets
+				err = IsEqualSymlink(file1, file2, fInfo1, fInfo2)
+			} else {
+				// Only one of the files is a symlink and we're not
+				// following them, they are not considered the same
+				err = fmt.Errorf("one file is symlink, one is regular file: %q, %q", file1, file2)
+			}
+		}
+	}
+	return
+}
+
 // IsSameFile compares two files by byte contents.
 // What to do with symlinks is configured by opt.
 func IsEqualFile(opt copy.Options, file1, file2 string) error {
@@ -84,33 +121,8 @@ func IsEqualFile(opt copy.Options, file1, file2 string) error {
 	if err != nil {
 		return err
 	}
-	fIsSymLink1 := fInfo1.Mode()&os.ModeSymlink == os.ModeSymlink
-	fIsSymLink2 := fInfo2.Mode()&os.ModeSymlink == os.ModeSymlink
-
-	// Check if either or both files are symlinks
-	if fIsSymLink1 || fIsSymLink2 {
-		if opt.FollowSymlinks {
-			// If we're following symlinks, find their targets in order
-			// to compare the end results
-			file1, err = filepath.EvalSymlinks(file1)
-			if err != nil {
-				return err
-			}
-			file2, err = filepath.EvalSymlinks(file2)
-			if err != nil {
-				return err
-			}
-		} else {
-			if fIsSymLink1 && fIsSymLink2 {
-				// If BOTH are symlinks and we're not following them,
-				// compare their targets
-				return IsEqualSymlink(file1, file2, fInfo1, fInfo2)
-			} else {
-				// Only one of the files is a symlink and we're not
-				// following them, they are not considered the same
-				return fmt.Errorf("one file is symlink, one is regular file: %q, %q", file1, file2)
-			}
-		}
+	if file1, file2, err = areFilesOrEqualSymlinks(opt, file1, file2, fInfo1, fInfo2); err != nil {
+		return err
 	}
 
 	// Open files
@@ -153,9 +165,6 @@ func IsEqualFile(opt copy.Options, file1, file2 string) error {
 			return fmt.Errorf("%q and %q do not have equal content", file1, file2)
 		}
 	}
-
-	// Files are the same
-	return nil
 }
 
 // IsEqualDir compares the contents of two directories.
